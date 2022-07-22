@@ -1,7 +1,7 @@
-package middlewares
+package middleware
 
 import (
-	"backend/services/auth"
+	"backend/pkg/auth"
 	"context"
 	"net/http"
 

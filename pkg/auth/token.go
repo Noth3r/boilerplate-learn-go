@@ -35,6 +35,7 @@ func (t *tokenservice) CreateToken(userId string, admin bool) (*TokenDetails, er
 
 	var err error
 
+	// Use this or the other one.
 	// token := jwt.New(jwt.SigningMethodHS256)
 	// claims := token.Claims.(jwt.MapClaims)
 	// claims["access_uuid"] = td.TokenUuid

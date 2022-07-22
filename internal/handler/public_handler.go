@@ -1,19 +1,12 @@
-package handlers
+package handler
 
 import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-
-	s "backend/server"
 )
 
 type PublicHandler struct {
-	server *s.Server
-}
-
-func NewPublicHandler(server *s.Server) *PublicHandler {
-	return &PublicHandler{server: server}
 }
 
 func (p *PublicHandler) Hello(w http.ResponseWriter, _ *http.Request) {

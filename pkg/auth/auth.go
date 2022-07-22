@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v9"
@@ -14,6 +16,9 @@ type AuthInterface interface {
 	FetchAuth(string) (string, error)
 	DeleteTokens(*AccessDetails) error
 	DeleteRefresh(string) error
+	CheckRevoked(string) (bool, error)
+	RevokeAll(string) error
+	RevokeRefresh(string, string) error
 }
 
 var _ AuthInterface = &service{}
@@ -49,12 +54,16 @@ func (tk *service) CreateAuth(userId string, td *TokenDetails) error {
 	rt := time.Unix(td.RtExpires, 0)
 	now := time.Now()
 
+	rtData, err := json.Marshal(map[string]interface{}{"userId": userId, "revoked": false})
+
+	fmt.Println("token: " + td.TokenUuid + " " + "refresh: " + td.RefreshUuid)
+
 	atCreated, err := tk.client.Set(ctx, td.TokenUuid, userId, at.Sub(now)).Result()
 	if err != nil {
 		return err
 	}
 
-	rtCreated, err := tk.client.Set(ctx, td.RefreshUuid, userId, rt.Sub(now)).Result()
+	rtCreated, err := tk.client.Set(ctx, td.RefreshUuid, rtData, rt.Sub(now)).Result()
 	if err != nil {
 		return err
 	}
@@ -96,6 +105,8 @@ func (tk *service) DeleteTokens(authD *AccessDetails) error {
 }
 
 func (tk *service) DeleteRefresh(refreshUuid string) error {
+	at := strings.Split(refreshUuid, "++")[0]
+	_, err := tk.client.Del(ctx, at).Result()
 	deleted, err := tk.client.Del(ctx, refreshUuid).Result()
 	if err != nil {
 		return err
@@ -105,5 +116,63 @@ func (tk *service) DeleteRefresh(refreshUuid string) error {
 		return errors.New("Something went wrong")
 	}
 
+	return nil
+}
+
+type data struct {
+	Revoked bool   `json:"revoked"`
+	UserId  string `json:"userId"`
+}
+
+func (tk *service) CheckRevoked(refreshUuid string) (bool, error) {
+	res, err := tk.client.Get(ctx, refreshUuid).Result()
+
+	if err != nil {
+		return false, err
+	}
+
+	data := data{}
+
+	errors := json.Unmarshal([]byte(res), &data)
+	if errors != nil {
+		return false, errors
+	}
+
+	if data.Revoked {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func (tk *service) RevokeAll(userId string) error {
+	data, err := tk.client.Keys(context.Background(), "*"+userId).Result()
+	if err != nil {
+		fmt.Println(err)
+		return err
+	}
+
+	if len(data) > 100 {
+		last := data[len(data)-1]
+		tk.DeleteRefresh(last)
+	}
+
+	for _, v := range data {
+		tk.RevokeRefresh(v, userId)
+	}
+
+	return nil
+}
+
+func (tk *service) RevokeRefresh(refreshUuid string, userId string) error {
+	rtData, err := json.Marshal(map[string]interface{}{"userId": userId, "revoked": true})
+	if err != nil {
+		return err
+	}
+
+	errSet := tk.client.Set(ctx, refreshUuid, rtData, tk.client.TTL(ctx, refreshUuid).Val())
+	if errSet != nil {
+		return err
+	}
 	return nil
 }

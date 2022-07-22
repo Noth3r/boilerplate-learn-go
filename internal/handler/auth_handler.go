@@ -1,7 +1,8 @@
-package handlers
+package handler
 
 import (
-	"backend/services/auth"
+	"backend/internal/validations"
+	"backend/pkg/auth"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,13 +10,13 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 )
 
-type authHandler struct {
+type AuthHandler struct {
 	rd auth.AuthInterface
 	tk auth.TokenInterface
 }
 
-func NewAuthHandler(rd auth.AuthInterface, tk auth.TokenInterface) *authHandler {
-	return &authHandler{
+func NewAuthHandler(rd auth.AuthInterface, tk auth.TokenInterface) *AuthHandler {
+	return &AuthHandler{
 		rd: rd,
 		tk: tk,
 	}
@@ -28,18 +29,36 @@ type signUp struct {
 	Admin    bool   `json:"admin" validate:"required"`
 }
 
-func (h *authHandler) SignIn(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) SignUp(w http.ResponseWriter, r *http.Request) {
 	decoder := json.NewDecoder(r.Body)
+	payload := validations.SignUpValidation{}
+	if err := decoder.Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	_, err := validations.UniversalValidation(payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+}
+
+func (h *AuthHandler) SignIn(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	// TODO: Ganti Ini
+	// user := validations.SignUpValidation{}
 	user := signUp{}
 	if err := decoder.Decode(&user); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if user.Email != "tes" || user.Password != "tes" {
-		http.Error(w, "Invalid email or password", http.StatusInternalServerError)
-		return
-	}
+	// if user.Email != "tes" || user.Password != "tes" {
+	// 	http.Error(w, "Invalid email or password", http.StatusInternalServerError)
+	// 	return
+	// }
 
 	ts, err := h.tk.CreateToken(user.Id, user.Admin)
 	if err != nil {
@@ -64,7 +83,7 @@ func (h *authHandler) SignIn(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(tokens["refresh_token"]))
 }
 
-func (h *authHandler) SignOut(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) SignOut(w http.ResponseWriter, r *http.Request) {
 	metadata, _ := h.tk.ExtractTokenMetadata(r)
 	if metadata != nil {
 		deleteErr := h.rd.DeleteTokens(metadata)
@@ -76,7 +95,7 @@ func (h *authHandler) SignOut(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("Successfully logged out"))
 }
 
-func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	mapToken := map[string]string{}
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&mapToken); err != nil {
@@ -117,14 +136,23 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Using userId to get the user role, temp: admin true
-		admin := true
-
-		delErr := h.rd.DeleteRefresh(refreshUuid)
-		if (delErr) != nil {
-			http.Error(w, delErr.Error(), http.StatusInternalServerError)
+		// Check refresh revoked or not
+		isRevoked, err := h.rd.CheckRevoked(refreshUuid)
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
+
+		if isRevoked {
+			h.rd.RevokeAll(userId)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		} else {
+			h.rd.RevokeRefresh(refreshUuid, userId)
+		}
+
+		// Using userId to get the user role, temp: admin true
+		admin := true
 
 		ts, createErr := h.tk.CreateToken(userId, admin)
 		if createErr != nil {
@@ -153,66 +181,3 @@ func (h *authHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 }
-
-// type AuthHandler struct {
-// 	server *s.Server
-// }
-
-// func NewAuthHandler(server *s.Server) *AuthHandler {
-// 	return &AuthHandler{server: server}
-// }
-
-// type signUp struct {
-// 	Email    string `json:"email" validate:"required,email"`
-// 	Password string `json:"password" validate:"required"`
-// }
-
-// func (a *AuthHandler) SignUp(w http.ResponseWriter, r *http.Request) {
-// 	decoder := json.NewDecoder(r.Body)
-// 	payload := signUp{}
-// 	if err := decoder.Decode(&payload); err != nil {
-// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-// 		return
-// 	}
-
-// 	if payload.Email != "tes" || payload.Password != "tes" {
-// 		http.Error(w, "Invalid email or password", http.StatusInternalServerError)
-// 		return
-// 	}
-
-// 	data, err := generateToken()
-// 	if err != nil {
-// 		http.Error(w, err.Error(), http.StatusInternalServerError)
-// 		return
-// 	}
-
-// 	w.Header().Set("Content-Type", "application/json")
-// 	w.Header().Set("Authorization", "Bearer "+data["refresh_token"])
-// 	w.Write([]byte(data["access_token"]))
-// }
-
-// func generateToken() (map[string]string, error) {
-// 	token := jwt.New(jwt.SigningMethodHS256)
-// 	claims := token.Claims.(jwt.MapClaims)
-// 	claims["email"] = "tes"
-// 	claims["exp"] = time.Now().Add(time.Minute * 15).Unix()
-// 	claims["admin"] = false
-// 	t, err := token.SignedString([]byte("secret"))
-
-// 	refreshToken := jwt.New(jwt.SigningMethodHS256)
-// 	rtClaims := refreshToken.Claims.(jwt.MapClaims)
-// 	rtClaims["sub"] = 1
-// 	rtClaims["exp"] = time.Now().Add(time.Hour * 24).Unix()
-// 	rt, err := refreshToken.SignedString([]byte("secret"))
-
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	// data, err := json.Marshal()
-// 	if err != nil {
-// 		return nil, err
-// 	}
-
-// 	return map[string]string{"access_token": t, "refresh_token": rt}, nil
-// }
